@@ -1,19 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-合同管理系统 - 轻量版
-使用 tkinter 开发，打包后体积更小
+合同管理系统 - 轻量版 v3.0
+功能：合同录入、开票回款、统计分析、图表展示
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import sqlite3
 import os
+import sys
 from datetime import datetime
 import csv
+import matplotlib
+matplotlib.use('TkAgg')
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
 
-# 数据库路径
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'contracts.db')
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+# 数据库路径 - 确保数据持久化
+# 打包后使用 exe 所在目录，开发时使用脚本所在目录
+if getattr(sys, 'frozen', False):
+    # 打包后的 exe 模式
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    # 开发模式
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DB_PATH = os.path.join(APP_DIR, 'contracts.db')
 
 
 class DatabaseManager:
@@ -29,21 +47,34 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # 合同表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS contracts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                合同编号 TEXT UNIQUE NOT NULL,
-                项目代码 TEXT,
-                对方单位名称 TEXT,
-                区域 TEXT,
-                合同金额 REAL,
-                合同起始日期 TEXT,
-                合同终止日期 TEXT,
-                合同内容 TEXT,
-                创建时间 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        # 检查是否需要升级数据库
+        cursor.execute("PRAGMA table_info(contracts)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        # 如果表不存在，创建新表
+        if not columns:
+            cursor.execute('''
+                CREATE TABLE contracts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    合同编号 TEXT UNIQUE NOT NULL,
+                    项目代码 TEXT,
+                    合同名称 TEXT,
+                    对方单位名称 TEXT,
+                    区域 TEXT,
+                    合同金额 REAL,
+                    实际签约日期 TEXT,
+                    合同起始日期 TEXT,
+                    合同终止日期 TEXT,
+                    合同内容 TEXT,
+                    创建时间 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+        else:
+            # 添加新字段（如果不存在）
+            if '合同名称' not in columns:
+                cursor.execute('ALTER TABLE contracts ADD COLUMN 合同名称 TEXT')
+            if '实际签约日期' not in columns:
+                cursor.execute('ALTER TABLE contracts ADD COLUMN 实际签约日期 TEXT')
         
         # 开票表
         cursor.execute('''
@@ -76,10 +107,12 @@ class DatabaseManager:
         try:
             cursor.execute('''
                 INSERT INTO contracts 
-                (合同编号, 项目代码, 对方单位名称, 区域, 合同金额, 合同起始日期, 合同终止日期, 合同内容)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (data['合同编号'], data['项目代码'], data['对方单位名称'], 
-                  data['区域'], data['合同金额'], data['合同起始日期'], 
+                (合同编号, 项目代码, 合同名称, 对方单位名称, 区域, 合同金额, 
+                 实际签约日期, 合同起始日期, 合同终止日期, 合同内容)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (data['合同编号'], data['项目代码'], data['合同名称'],
+                  data['对方单位名称'], data['区域'], data['合同金额'],
+                  data['实际签约日期'], data['合同起始日期'], 
                   data['合同终止日期'], data['合同内容']))
             conn.commit()
             return True
@@ -88,12 +121,40 @@ class DatabaseManager:
         finally:
             conn.close()
     
+    def update_contract(self, contract_no, data):
+        """更新合同信息"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE contracts SET 
+                项目代码=?, 合同名称=?, 对方单位名称=?, 区域=?, 合同金额=?,
+                实际签约日期=?, 合同起始日期=?, 合同终止日期=?, 合同内容=?
+                WHERE 合同编号=?
+            ''', (data['项目代码'], data['合同名称'], data['对方单位名称'],
+                  data['区域'], data['合同金额'], data['实际签约日期'],
+                  data['合同起始日期'], data['合同终止日期'], 
+                  data['合同内容'], contract_no))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    
+    def get_contract_by_no(self, contract_no):
+        """根据合同编号获取合同详情"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM contracts WHERE 合同编号=?', (contract_no,))
+        row = cursor.fetchone()
+        conn.close()
+        return row
+    
     def get_contracts(self, year=None, region=None):
         conn = self.get_connection()
         query = '''
             SELECT 
-                c.合同编号, c.项目代码, c.对方单位名称, c.区域, c.合同金额,
-                c.合同起始日期, c.合同终止日期, c.合同内容,
+                c.合同编号, c.项目代码, c.合同名称, c.对方单位名称, c.区域, c.合同金额,
+                c.实际签约日期, c.合同起始日期, c.合同终止日期, c.合同内容,
                 COALESCE(SUM(i.开票金额), 0) as 累计开票,
                 COALESCE(SUM(p.回款金额), 0) as 累计回款
             FROM contracts c
@@ -105,7 +166,7 @@ class DatabaseManager:
         params = []
         
         if year:
-            conditions.append("strftime('%Y', c.合同起始日期) = ?")
+            conditions.append("strftime('%Y', c.实际签约日期) = ?")
             params.append(str(year))
         if region:
             conditions.append("c.区域 = ?")
@@ -142,7 +203,7 @@ class DatabaseManager:
         conn = self.get_connection()
         query = '''
             SELECT 
-                strftime('%Y', c.合同起始日期) as 年度,
+                strftime('%Y', c.实际签约日期) as 年度,
                 COUNT(c.合同编号) as 合同数,
                 SUM(c.合同金额) as 合同总额,
                 COALESCE(SUM(i.开票金额), 0) as 开票总额,
@@ -150,7 +211,8 @@ class DatabaseManager:
             FROM contracts c
             LEFT JOIN invoices i ON c.合同编号 = i.合同编号
             LEFT JOIN payments p ON c.合同编号 = p.合同编号
-            GROUP BY strftime('%Y', c.合同起始日期)
+            WHERE c.实际签约日期 IS NOT NULL AND c.实际签约日期 != ''
+            GROUP BY strftime('%Y', c.实际签约日期)
             ORDER BY 年度 DESC
         '''
         cursor = conn.cursor()
@@ -164,7 +226,7 @@ class DatabaseManager:
         query = '''
             SELECT 
                 c.区域,
-                strftime('%Y', c.合同起始日期) as 年度,
+                strftime('%Y', c.实际签约日期) as 年度,
                 c.合同内容,
                 COUNT(c.合同编号) as 合同数,
                 SUM(c.合同金额) as 合同总额,
@@ -173,14 +235,15 @@ class DatabaseManager:
             FROM contracts c
             LEFT JOIN invoices i ON c.合同编号 = i.合同编号
             LEFT JOIN payments p ON c.合同编号 = p.合同编号
+            WHERE c.实际签约日期 IS NOT NULL AND c.实际签约日期 != ''
         '''
         
         params = []
         if year:
-            query += " WHERE strftime('%Y', c.合同起始日期) = ?"
+            query += " AND strftime('%Y', c.实际签约日期) = ?"
             params.append(str(year))
         
-        query += " GROUP BY c.区域, strftime('%Y', c.合同起始日期), c.合同内容 ORDER BY 年度 DESC, 区域"
+        query += " GROUP BY c.区域, strftime('%Y', c.实际签约日期), c.合同内容 ORDER BY 年度 DESC, 区域"
         
         cursor = conn.cursor()
         cursor.execute(query, params)
@@ -198,9 +261,11 @@ class DatabaseManager:
                     data = {
                         '合同编号': row.get('合同编号', ''),
                         '项目代码': row.get('项目代码', ''),
+                        '合同名称': row.get('合同名称', ''),
                         '对方单位名称': row.get('对方单位名称', ''),
                         '区域': row.get('区域', ''),
                         '合同金额': float(row.get('合同金额', 0) or 0),
+                        '实际签约日期': row.get('实际签约日期', ''),
                         '合同起始日期': row.get('合同起始日期', ''),
                         '合同终止日期': row.get('合同终止日期', ''),
                         '合同内容': row.get('合同内容', '')
@@ -217,13 +282,13 @@ class ContractManagerApp:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("合同管理系统 v2.0 (轻量版)")
-        self.root.geometry("1200x700")
+        self.root.title("合同管理系统 v3.0")
+        self.root.geometry("1400x800")
         
         self.db = DatabaseManager()
         
-        # 区域列表
-        self.regions = ['华北区', '华东区', '华南区', '华中区', '东北区', '西南区', '西北区', '京津区', '国能业务部']
+        # 区域列表（已修改）
+        self.regions = ['北方区', '西北区', '华东区', '华南区', '国际部', '其他']
         
         # 合同类型
         self.contract_types = ['维保费', '维修费', '技术服务费', '其他']
@@ -259,6 +324,7 @@ class ContractManagerApp:
         toolbar.pack(fill='x', padx=5, pady=5)
         
         ttk.Button(toolbar, text="添加合同", command=self.add_contract).pack(side='left', padx=2)
+        ttk.Button(toolbar, text="修改合同", command=self.edit_contract).pack(side='left', padx=2)
         ttk.Button(toolbar, text="添加开票", command=self.add_invoice).pack(side='left', padx=2)
         ttk.Button(toolbar, text="添加回款", command=self.add_payment).pack(side='left', padx=2)
         ttk.Button(toolbar, text="导入CSV", command=self.import_csv).pack(side='left', padx=2)
@@ -283,15 +349,18 @@ class ContractManagerApp:
         self.region_filter.bind('<<ComboboxSelected>>', lambda e: self.load_data())
         
         # 表格
-        columns = ('合同编号', '项目代码', '对方单位', '区域', '合同金额', '起始日期', '终止日期', '合同内容', '累计开票', '累计回款', '应收账款')
+        columns = ('合同编号', '项目代码', '合同名称', '对方单位', '区域', '合同金额', 
+                  '签约日期', '起始日期', '终止日期', '合同内容', '累计开票', '累计回款', '应收账款')
         self.contract_tree = ttk.Treeview(parent, columns=columns, show='headings', height=25)
         
         for col in columns:
             self.contract_tree.heading(col, text=col)
             self.contract_tree.column(col, width=100, anchor='center')
         
+        self.contract_tree.column('合同名称', width=150)
         self.contract_tree.column('对方单位', width=150)
         self.contract_tree.column('合同金额', width=120)
+        self.contract_tree.column('签约日期', width=100)
         self.contract_tree.column('累计开票', width=120)
         self.contract_tree.column('累计回款', width=120)
         self.contract_tree.column('应收账款', width=120)
@@ -305,15 +374,26 @@ class ContractManagerApp:
     
     def create_yearly_tab(self, parent):
         """年度统计标签页"""
-        # 表格
+        # 上半部分：表格
+        table_frame = ttk.Frame(parent)
+        table_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
         columns = ('年度', '合同数', '合同总额', '开票总额', '回款总额', '应收账款')
-        self.yearly_tree = ttk.Treeview(parent, columns=columns, show='headings', height=30)
+        self.yearly_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=15)
         
         for col in columns:
             self.yearly_tree.heading(col, text=col)
             self.yearly_tree.column(col, width=150, anchor='center')
         
-        self.yearly_tree.pack(fill='both', expand=True, padx=10, pady=10)
+        self.yearly_tree.pack(fill='both', expand=True)
+        
+        # 下半部分：图表
+        chart_frame = ttk.LabelFrame(parent, text="年度统计图表")
+        chart_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.yearly_fig = Figure(figsize=(12, 4), dpi=100)
+        self.yearly_canvas = FigureCanvasTkAgg(self.yearly_fig, master=chart_frame)
+        self.yearly_canvas.get_tk_widget().pack(fill='both', expand=True)
     
     def create_region_tab(self, parent):
         """区域统计标签页"""
@@ -328,15 +408,26 @@ class ContractManagerApp:
         self.region_year_filter.pack(side='left', padx=2)
         self.region_year_filter.bind('<<ComboboxSelected>>', lambda e: self.load_region_stats())
         
-        # 表格
+        # 上半部分：表格
+        table_frame = ttk.Frame(parent)
+        table_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
         columns = ('区域', '年度', '合同内容', '合同数', '合同总额', '开票总额', '回款总额')
-        self.region_tree = ttk.Treeview(parent, columns=columns, show='headings', height=30)
+        self.region_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=15)
         
         for col in columns:
             self.region_tree.heading(col, text=col)
             self.region_tree.column(col, width=120, anchor='center')
         
-        self.region_tree.pack(fill='both', expand=True, padx=10, pady=10)
+        self.region_tree.pack(fill='both', expand=True)
+        
+        # 下半部分：图表
+        chart_frame = ttk.LabelFrame(parent, text="区域统计图表")
+        chart_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.region_fig = Figure(figsize=(12, 4), dpi=100)
+        self.region_canvas = FigureCanvasTkAgg(self.region_fig, master=chart_frame)
+        self.region_canvas.get_tk_widget().pack(fill='both', expand=True)
     
     def load_data(self):
         """加载数据"""
@@ -351,12 +442,13 @@ class ContractManagerApp:
         
         # 填充数据
         for row in rows:
-            contract_no, project_code, company, region, amount, start_date, end_date, content, invoice, payment = row
+            contract_no, project_code, contract_name, company, region, amount, \
+            sign_date, start_date, end_date, content, invoice, payment = row
             receivable = invoice - payment
             self.contract_tree.insert('', 'end', values=(
-                contract_no, project_code, company, region, 
+                contract_no, project_code, contract_name or '', company, region, 
                 f'{amount:,.2f}' if amount else '0.00',
-                start_date or '', end_date or '', content or '',
+                sign_date or '', start_date or '', end_date or '', content or '',
                 f'{invoice:,.2f}', f'{payment:,.2f}', f'{receivable:,.2f}'
             ))
         
@@ -381,6 +473,50 @@ class ContractManagerApp:
                 f'{payment:,.2f}' if payment else '0.00',
                 f'{receivable:,.2f}'
             ))
+        
+        # 绘制图表
+        self.draw_yearly_chart(rows)
+    
+    def draw_yearly_chart(self, rows):
+        """绘制年度统计图表"""
+        self.yearly_fig.clear()
+        
+        if not rows:
+            self.yearly_canvas.draw()
+            return
+        
+        # 准备数据
+        years = [row[0] for row in rows][::-1]
+        invoices = [row[3] or 0 for row in rows][::-1]
+        payments = [row[4] or 0 for row in rows][::-1]
+        
+        # 创建子图
+        ax = self.yearly_fig.add_subplot(111)
+        
+        x = range(len(years))
+        width = 0.35
+        
+        bars1 = ax.bar([i - width/2 for i in x], invoices, width, label='开票总额', color='#3498db')
+        bars2 = ax.bar([i + width/2 for i in x], payments, width, label='回款总额', color='#2ecc71')
+        
+        ax.set_xlabel('年度')
+        ax.set_ylabel('金额（元）')
+        ax.set_title('年度开票与回款统计')
+        ax.set_xticks(x)
+        ax.set_xticklabels(years)
+        ax.legend()
+        
+        # 在柱状图上显示数值
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height/10000:.1f}万',
+                           ha='center', va='bottom', fontsize=8)
+        
+        self.yearly_fig.tight_layout()
+        self.yearly_canvas.draw()
     
     def load_region_stats(self):
         """加载区域统计"""
@@ -398,12 +534,72 @@ class ContractManagerApp:
                 f'{invoice:,.2f}' if invoice else '0.00',
                 f'{payment:,.2f}' if payment else '0.00'
             ))
+        
+        # 绘制图表
+        self.draw_region_chart(rows)
+    
+    def draw_region_chart(self, rows):
+        """绘制区域统计图表"""
+        self.region_fig.clear()
+        
+        if not rows:
+            self.region_canvas.draw()
+            return
+        
+        # 按区域汇总
+        region_data = {}
+        for row in rows:
+            region = row[0]
+            if region not in region_data:
+                region_data[region] = {'total': 0, 'invoice': 0, 'payment': 0}
+            region_data[region]['total'] += row[4] or 0
+            region_data[region]['invoice'] += row[5] or 0
+            region_data[region]['payment'] += row[6] or 0
+        
+        regions = list(region_data.keys())
+        totals = [region_data[r]['total'] for r in regions]
+        invoices = [region_data[r]['invoice'] for r in regions]
+        payments = [region_data[r]['payment'] for r in regions]
+        
+        # 创建子图
+        ax = self.region_fig.add_subplot(111)
+        
+        x = range(len(regions))
+        width = 0.25
+        
+        bars1 = ax.bar([i - width for i in x], totals, width, label='合同总额', color='#e74c3c')
+        bars2 = ax.bar([i for i in x], invoices, width, label='开票总额', color='#3498db')
+        bars3 = ax.bar([i + width for i in x], payments, width, label='回款总额', color='#2ecc71')
+        
+        ax.set_xlabel('区域')
+        ax.set_ylabel('金额（元）')
+        ax.set_title('区域合同统计')
+        ax.set_xticks(x)
+        ax.set_xticklabels(regions, rotation=45, ha='right')
+        ax.legend()
+        
+        self.region_fig.tight_layout()
+        self.region_canvas.draw()
     
     def add_contract(self):
         """添加合同"""
+        self.show_contract_dialog()
+    
+    def edit_contract(self):
+        """修改合同"""
+        selected = self.contract_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择一个合同")
+            return
+        
+        contract_no = self.contract_tree.item(selected[0])['values'][0]
+        self.show_contract_dialog(contract_no)
+    
+    def show_contract_dialog(self, contract_no=None):
+        """显示合同对话框（添加/修改）"""
         dialog = tk.Toplevel(self.root)
-        dialog.title("添加合同")
-        dialog.geometry("500x450")
+        dialog.title("修改合同" if contract_no else "添加合同")
+        dialog.geometry("550x550")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -426,6 +622,12 @@ class ContractManagerApp:
         fields['项目代码'].grid(row=row, column=1, pady=5)
         row += 1
         
+        # 合同名称
+        ttk.Label(frame, text="合同名称:").grid(row=row, column=0, sticky='e', pady=5)
+        fields['合同名称'] = ttk.Entry(frame, width=30)
+        fields['合同名称'].grid(row=row, column=1, pady=5)
+        row += 1
+        
         # 对方单位
         ttk.Label(frame, text="对方单位:").grid(row=row, column=0, sticky='e', pady=5)
         fields['对方单位'] = ttk.Entry(frame, width=30)
@@ -444,10 +646,17 @@ class ContractManagerApp:
         fields['合同金额'].grid(row=row, column=1, pady=5)
         row += 1
         
+        # 实际签约日期
+        ttk.Label(frame, text="实际签约日期:").grid(row=row, column=0, sticky='e', pady=5)
+        fields['实际签约日期'] = ttk.Entry(frame, width=30)
+        fields['实际签约日期'].insert(0, datetime.now().strftime('%Y-%m-%d'))
+        fields['实际签约日期'].grid(row=row, column=1, pady=5)
+        ttk.Label(frame, text="（用于确定合同年度）", foreground='gray').grid(row=row, column=2, sticky='w', pady=5)
+        row += 1
+        
         # 起始日期
         ttk.Label(frame, text="起始日期:").grid(row=row, column=0, sticky='e', pady=5)
         fields['起始日期'] = ttk.Entry(frame, width=30)
-        fields['起始日期'].insert(0, datetime.now().strftime('%Y-%m-%d'))
         fields['起始日期'].grid(row=row, column=1, pady=5)
         row += 1
         
@@ -463,6 +672,23 @@ class ContractManagerApp:
         fields['合同内容'].grid(row=row, column=1, pady=5)
         row += 1
         
+        # 如果是修改，填充现有数据
+        if contract_no:
+            contract = self.db.get_contract_by_no(contract_no)
+            if contract:
+                fields['合同编号'].insert(0, contract[1] or '')
+                fields['合同编号'].config(state='disabled')  # 合同编号不可修改
+                fields['项目代码'].insert(0, contract[2] or '')
+                fields['合同名称'].insert(0, contract[3] or '')
+                fields['对方单位'].insert(0, contract[4] or '')
+                fields['区域'].set(contract[5] or '')
+                fields['合同金额'].insert(0, str(contract[6] or ''))
+                fields['实际签约日期'].delete(0, tk.END)
+                fields['实际签约日期'].insert(0, contract[7] or '')
+                fields['起始日期'].insert(0, contract[8] or '')
+                fields['终止日期'].insert(0, contract[9] or '')
+                fields['合同内容'].set(contract[10] or '')
+        
         # 按钮
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=20)
@@ -472,9 +698,11 @@ class ContractManagerApp:
                 data = {
                     '合同编号': fields['合同编号'].get().strip(),
                     '项目代码': fields['项目代码'].get().strip(),
+                    '合同名称': fields['合同名称'].get().strip(),
                     '对方单位名称': fields['对方单位'].get().strip(),
                     '区域': fields['区域'].get(),
                     '合同金额': float(fields['合同金额'].get().strip() or 0),
+                    '实际签约日期': fields['实际签约日期'].get().strip(),
                     '合同起始日期': fields['起始日期'].get().strip(),
                     '合同终止日期': fields['终止日期'].get().strip(),
                     '合同内容': fields['合同内容'].get()
@@ -484,12 +712,22 @@ class ContractManagerApp:
                     messagebox.showwarning("警告", "合同编号不能为空")
                     return
                 
-                if self.db.add_contract(data):
-                    messagebox.showinfo("成功", "合同添加成功")
-                    dialog.destroy()
-                    self.load_data()
+                if contract_no:
+                    # 修改
+                    if self.db.update_contract(contract_no, data):
+                        messagebox.showinfo("成功", "合同修改成功")
+                        dialog.destroy()
+                        self.load_data()
+                    else:
+                        messagebox.showerror("错误", "合同修改失败")
                 else:
-                    messagebox.showwarning("警告", "合同编号已存在")
+                    # 添加
+                    if self.db.add_contract(data):
+                        messagebox.showinfo("成功", "合同添加成功")
+                        dialog.destroy()
+                        self.load_data()
+                    else:
+                        messagebox.showwarning("警告", "合同编号已存在")
             except ValueError:
                 messagebox.showwarning("警告", "合同金额必须是数字")
         
