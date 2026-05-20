@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-合同管理系统 - 轻量版 v3.1
-功能：合同录入、开票回款、统计分析、图表展示、日期选择器
+合同管理系统 - 轻量版 v3.2
+功能：合同录入、开票回款、统计分析、图表展示、日期选择器、删除合同
 """
 
 import tkinter as tk
@@ -23,13 +23,18 @@ import matplotlib.pyplot as plt
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-# 数据库路径 - 确保数据持久化
-if getattr(sys, 'frozen', False):
-    APP_DIR = os.path.dirname(sys.executable)
+# 数据库路径 - 使用用户数据目录确保数据持久化
+if sys.platform == 'win32':
+    # Windows: 使用 AppData/Local 目录
+    DATA_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'ContractManager')
 else:
-    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    # macOS/Linux: 使用用户主目录
+    DATA_DIR = os.path.join(os.path.expanduser('~'), '.contract_manager')
 
-DB_PATH = os.path.join(APP_DIR, 'contracts.db')
+# 确保数据目录存在
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATA_DIR, 'contracts.db')
 
 
 class DatabaseManager:
@@ -140,6 +145,22 @@ class DatabaseManager:
         row = cursor.fetchone()
         conn.close()
         return row
+    
+    def delete_contract(self, contract_no):
+        """删除合同及其相关的开票和回款记录"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            # 先删除相关的开票记录
+            cursor.execute('DELETE FROM invoices WHERE 合同编号=?', (contract_no,))
+            # 删除相关的回款记录
+            cursor.execute('DELETE FROM payments WHERE 合同编号=?', (contract_no,))
+            # 删除合同
+            cursor.execute('DELETE FROM contracts WHERE 合同编号=?', (contract_no,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
     
     def get_contracts(self, year=None, region=None):
         conn = self.get_connection()
@@ -342,7 +363,7 @@ class ContractManagerApp:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("合同管理系统 v3.1")
+        self.root.title("合同管理系统 v3.2")
         self.root.geometry("1400x800")
         
         self.db = DatabaseManager()
@@ -375,6 +396,7 @@ class ContractManagerApp:
         
         ttk.Button(toolbar, text="添加合同", command=self.add_contract).pack(side='left', padx=2)
         ttk.Button(toolbar, text="修改合同", command=self.edit_contract).pack(side='left', padx=2)
+        ttk.Button(toolbar, text="删除合同", command=self.delete_contract).pack(side='left', padx=2)
         ttk.Button(toolbar, text="添加开票", command=self.add_invoice).pack(side='left', padx=2)
         ttk.Button(toolbar, text="添加回款", command=self.add_payment).pack(side='left', padx=2)
         ttk.Button(toolbar, text="导入数据", command=self.import_data).pack(side='left', padx=2)
@@ -617,6 +639,27 @@ class ContractManagerApp:
         
         contract_no = self.contract_tree.item(selected[0])['values'][0]
         self.show_contract_dialog(contract_no)
+    
+    def delete_contract(self):
+        """删除选中的合同"""
+        selected = self.contract_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择一个合同")
+            return
+        
+        contract_no = self.contract_tree.item(selected[0])['values'][0]
+        contract_name = self.contract_tree.item(selected[0])['values'][2]
+        
+        # 确认删除
+        if not messagebox.askyesno("确认删除", 
+                                   f"确定要删除合同 '{contract_no}' 吗？\n\n合同名称: {contract_name}\n\n注意：该合同的所有开票和回款记录也将被删除！"):
+            return
+        
+        if self.db.delete_contract(contract_no):
+            messagebox.showinfo("成功", "合同删除成功")
+            self.load_data()
+        else:
+            messagebox.showerror("错误", "合同删除失败")
     
     def show_contract_dialog(self, contract_no=None):
         dialog = tk.Toplevel(self.root)
