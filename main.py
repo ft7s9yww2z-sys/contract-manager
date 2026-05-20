@@ -407,7 +407,7 @@ class ContractManagerApp:
         ttk.Button(toolbar, text="修改合同", command=self.edit_contract).pack(side='left', padx=2)
         ttk.Button(toolbar, text="添加开票", command=self.add_invoice).pack(side='left', padx=2)
         ttk.Button(toolbar, text="添加回款", command=self.add_payment).pack(side='left', padx=2)
-        ttk.Button(toolbar, text="导入CSV", command=self.import_csv).pack(side='left', padx=2)
+        ttk.Button(toolbar, text="导入数据", command=self.import_data).pack(side='left', padx=2)
         ttk.Button(toolbar, text="刷新", command=self.load_data).pack(side='left', padx=2)
         
         # 筛选区
@@ -906,7 +906,7 @@ class ContractManagerApp:
         ttk.Button(btn_frame, text="保存", command=save).pack(side='left', padx=10)
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side='left', padx=10)
     
-    def import_csv(self):
+    def import_data(self):
         """导入数据"""
         file_path = filedialog.askopenfilename(
             title="选择数据文件",
