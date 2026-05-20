@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-合同管理系统 - 轻量版 v3.0
-功能：合同录入、开票回款、统计分析、图表展示
+合同管理系统 - 轻量版 v3.1
+功能：合同录入、开票回款、统计分析、图表展示、日期选择器
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from tkcalendar import DateEntry
 import sqlite3
 import os
 import sys
@@ -23,12 +24,9 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 # 数据库路径 - 确保数据持久化
-# 打包后使用 exe 所在目录，开发时使用脚本所在目录
 if getattr(sys, 'frozen', False):
-    # 打包后的 exe 模式
     APP_DIR = os.path.dirname(sys.executable)
 else:
-    # 开发模式
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DB_PATH = os.path.join(APP_DIR, 'contracts.db')
@@ -51,7 +49,6 @@ class DatabaseManager:
         cursor.execute("PRAGMA table_info(contracts)")
         columns = [col[1] for col in cursor.fetchall()]
         
-        # 如果表不存在，创建新表
         if not columns:
             cursor.execute('''
                 CREATE TABLE contracts (
@@ -70,13 +67,11 @@ class DatabaseManager:
                 )
             ''')
         else:
-            # 添加新字段（如果不存在）
             if '合同名称' not in columns:
                 cursor.execute('ALTER TABLE contracts ADD COLUMN 合同名称 TEXT')
             if '实际签约日期' not in columns:
                 cursor.execute('ALTER TABLE contracts ADD COLUMN 实际签约日期 TEXT')
         
-        # 开票表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS invoices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +82,6 @@ class DatabaseManager:
             )
         ''')
         
-        # 回款表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +116,6 @@ class DatabaseManager:
             conn.close()
     
     def update_contract(self, contract_no, data):
-        """更新合同信息"""
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
@@ -141,7 +134,6 @@ class DatabaseManager:
             conn.close()
     
     def get_contract_by_no(self, contract_no):
-        """根据合同编号获取合同详情"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM contracts WHERE 合同编号=?', (contract_no,))
@@ -251,33 +243,26 @@ class DatabaseManager:
         conn.close()
         return rows
     
-    def import_from_csv(self, file_path):
+    def import_from_file(self, file_path):
         """从CSV或Excel导入"""
         count = 0
         try:
-            # 判断文件类型
             if file_path.endswith(('.xlsx', '.xls')):
-                # Excel 文件
                 try:
                     import openpyxl
                     wb = openpyxl.load_workbook(file_path, data_only=True)
                     
-                    # 遍历所有工作表
                     for sheet_name in wb.sheetnames:
-                        # 跳过非年份工作表（可选）
                         ws = wb[sheet_name]
                         
-                        # 获取表头
                         headers = []
                         for cell in ws[1]:
                             headers.append(str(cell.value) if cell.value else '')
                         
-                        # 从第二行开始读取数据
                         for row in ws.iter_rows(min_row=2, values_only=True):
-                            if not row[0]:  # 跳过空行
+                            if not row[0]:
                                 continue
                             
-                            # 构建数据字典
                             row_data = {}
                             for i, header in enumerate(headers):
                                 if i < len(row):
@@ -305,7 +290,6 @@ class DatabaseManager:
                 except ImportError:
                     raise Exception("需要安装 openpyxl 库来读取 Excel 文件")
             else:
-                # CSV 文件
                 with open(file_path, 'r', encoding='utf-8-sig') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
@@ -333,19 +317,15 @@ class DatabaseManager:
         if not date_value:
             return ''
         
-        # 如果是 datetime 对象
         if hasattr(date_value, 'strftime'):
             return date_value.strftime('%Y-%m-%d')
         
-        # 如果是字符串
         date_str = str(date_value)
         if date_str == 'None' or not date_str.strip():
             return ''
         
-        # 尝试解析常见格式
         try:
             from datetime import datetime as dt
-            # 尝试多种格式
             for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%Y年%m月%d日']:
                 try:
                     parsed = dt.strptime(date_str.strip(), fmt)
@@ -362,44 +342,34 @@ class ContractManagerApp:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("合同管理系统 v3.0")
+        self.root.title("合同管理系统 v3.1")
         self.root.geometry("1400x800")
         
         self.db = DatabaseManager()
         
-        # 区域列表（已修改）
         self.regions = ['北方区', '西北区', '华东区', '华南区', '国际部', '其他']
-        
-        # 合同类型
         self.contract_types = ['维保费', '维修费', '技术服务费', '其他']
         
         self.create_widgets()
         self.load_data()
     
     def create_widgets(self):
-        """创建界面"""
-        # 创建笔记本（标签页）
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # 合同管理标签页
         contract_frame = ttk.Frame(notebook)
         notebook.add(contract_frame, text='合同管理')
         self.create_contract_tab(contract_frame)
         
-        # 年度统计标签页
         yearly_frame = ttk.Frame(notebook)
         notebook.add(yearly_frame, text='年度统计')
         self.create_yearly_tab(yearly_frame)
         
-        # 区域统计标签页
         region_frame = ttk.Frame(notebook)
         notebook.add(region_frame, text='区域统计')
         self.create_region_tab(region_frame)
     
     def create_contract_tab(self, parent):
-        """合同管理标签页"""
-        # 工具栏
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill='x', padx=5, pady=5)
         
@@ -410,7 +380,6 @@ class ContractManagerApp:
         ttk.Button(toolbar, text="导入数据", command=self.import_data).pack(side='left', padx=2)
         ttk.Button(toolbar, text="刷新", command=self.load_data).pack(side='left', padx=2)
         
-        # 筛选区
         filter_frame = ttk.Frame(parent)
         filter_frame.pack(fill='x', padx=5, pady=5)
         
@@ -428,7 +397,6 @@ class ContractManagerApp:
         self.region_filter.pack(side='left', padx=2)
         self.region_filter.bind('<<ComboboxSelected>>', lambda e: self.load_data())
         
-        # 表格
         columns = ('合同编号', '项目代码', '合同名称', '对方单位', '区域', '合同金额', 
                   '签约日期', '起始日期', '终止日期', '合同内容', '累计开票', '累计回款', '应收账款')
         self.contract_tree = ttk.Treeview(parent, columns=columns, show='headings', height=25)
@@ -445,7 +413,6 @@ class ContractManagerApp:
         self.contract_tree.column('累计回款', width=120)
         self.contract_tree.column('应收账款', width=120)
         
-        # 滚动条
         scrollbar = ttk.Scrollbar(parent, orient='vertical', command=self.contract_tree.yview)
         self.contract_tree.configure(yscrollcommand=scrollbar.set)
         
@@ -453,8 +420,6 @@ class ContractManagerApp:
         scrollbar.pack(side='right', fill='y', pady=5)
     
     def create_yearly_tab(self, parent):
-        """年度统计标签页"""
-        # 上半部分：表格
         table_frame = ttk.Frame(parent)
         table_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -467,7 +432,6 @@ class ContractManagerApp:
         
         self.yearly_tree.pack(fill='both', expand=True)
         
-        # 下半部分：图表
         chart_frame = ttk.LabelFrame(parent, text="年度统计图表")
         chart_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -476,8 +440,6 @@ class ContractManagerApp:
         self.yearly_canvas.get_tk_widget().pack(fill='both', expand=True)
     
     def create_region_tab(self, parent):
-        """区域统计标签页"""
-        # 筛选
         filter_frame = ttk.Frame(parent)
         filter_frame.pack(fill='x', padx=5, pady=5)
         
@@ -488,7 +450,6 @@ class ContractManagerApp:
         self.region_year_filter.pack(side='left', padx=2)
         self.region_year_filter.bind('<<ComboboxSelected>>', lambda e: self.load_region_stats())
         
-        # 上半部分：表格
         table_frame = ttk.Frame(parent)
         table_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -501,7 +462,6 @@ class ContractManagerApp:
         
         self.region_tree.pack(fill='both', expand=True)
         
-        # 下半部分：图表
         chart_frame = ttk.LabelFrame(parent, text="区域统计图表")
         chart_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -510,17 +470,14 @@ class ContractManagerApp:
         self.region_canvas.get_tk_widget().pack(fill='both', expand=True)
     
     def load_data(self):
-        """加载数据"""
         year = None if self.year_filter.get() == '全部' else self.year_filter.get()
         region = None if self.region_filter.get() == '全部' else self.region_filter.get()
         
         rows = self.db.get_contracts(year, region)
         
-        # 清空表格
         for item in self.contract_tree.get_children():
             self.contract_tree.delete(item)
         
-        # 填充数据
         for row in rows:
             contract_no, project_code, contract_name, company, region, amount, \
             sign_date, start_date, end_date, content, invoice, payment = row
@@ -532,12 +489,10 @@ class ContractManagerApp:
                 f'{invoice:,.2f}', f'{payment:,.2f}', f'{receivable:,.2f}'
             ))
         
-        # 加载统计
         self.load_yearly_stats()
         self.load_region_stats()
     
     def load_yearly_stats(self):
-        """加载年度统计"""
         rows = self.db.get_yearly_stats()
         
         for item in self.yearly_tree.get_children():
@@ -554,23 +509,19 @@ class ContractManagerApp:
                 f'{receivable:,.2f}'
             ))
         
-        # 绘制图表
         self.draw_yearly_chart(rows)
     
     def draw_yearly_chart(self, rows):
-        """绘制年度统计图表"""
         self.yearly_fig.clear()
         
         if not rows:
             self.yearly_canvas.draw()
             return
         
-        # 准备数据
         years = [row[0] for row in rows][::-1]
         invoices = [row[3] or 0 for row in rows][::-1]
         payments = [row[4] or 0 for row in rows][::-1]
         
-        # 创建子图
         ax = self.yearly_fig.add_subplot(111)
         
         x = range(len(years))
@@ -586,7 +537,6 @@ class ContractManagerApp:
         ax.set_xticklabels(years)
         ax.legend()
         
-        # 在柱状图上显示数值
         for bars in [bars1, bars2]:
             for bar in bars:
                 height = bar.get_height()
@@ -599,7 +549,6 @@ class ContractManagerApp:
         self.yearly_canvas.draw()
     
     def load_region_stats(self):
-        """加载区域统计"""
         year = None if self.region_year_filter.get() == '全部' else self.region_year_filter.get()
         rows = self.db.get_region_stats(year)
         
@@ -615,18 +564,15 @@ class ContractManagerApp:
                 f'{payment:,.2f}' if payment else '0.00'
             ))
         
-        # 绘制图表
         self.draw_region_chart(rows)
     
     def draw_region_chart(self, rows):
-        """绘制区域统计图表"""
         self.region_fig.clear()
         
         if not rows:
             self.region_canvas.draw()
             return
         
-        # 按区域汇总
         region_data = {}
         for row in rows:
             region = row[0]
@@ -641,7 +587,6 @@ class ContractManagerApp:
         invoices = [region_data[r]['invoice'] for r in regions]
         payments = [region_data[r]['payment'] for r in regions]
         
-        # 创建子图
         ax = self.region_fig.add_subplot(111)
         
         x = range(len(regions))
@@ -662,11 +607,9 @@ class ContractManagerApp:
         self.region_canvas.draw()
     
     def add_contract(self):
-        """添加合同"""
         self.show_contract_dialog()
     
     def edit_contract(self):
-        """修改合同"""
         selected = self.contract_tree.selection()
         if not selected:
             messagebox.showwarning("警告", "请先选择一个合同")
@@ -676,14 +619,12 @@ class ContractManagerApp:
         self.show_contract_dialog(contract_no)
     
     def show_contract_dialog(self, contract_no=None):
-        """显示合同对话框（添加/修改）"""
         dialog = tk.Toplevel(self.root)
         dialog.title("修改合同" if contract_no else "添加合同")
-        dialog.geometry("550x550")
+        dialog.geometry("600x600")
         dialog.transient(self.root)
         dialog.grab_set()
         
-        # 表单
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill='both', expand=True)
         
@@ -726,23 +667,22 @@ class ContractManagerApp:
         fields['合同金额'].grid(row=row, column=1, pady=5)
         row += 1
         
-        # 实际签约日期
+        # 实际签约日期 - 使用日期选择器
         ttk.Label(frame, text="实际签约日期:").grid(row=row, column=0, sticky='e', pady=5)
-        fields['实际签约日期'] = ttk.Entry(frame, width=30)
-        fields['实际签约日期'].insert(0, datetime.now().strftime('%Y-%m-%d'))
+        fields['实际签约日期'] = DateEntry(frame, width=27, date_pattern='yyyy-mm-dd', locale='zh_CN')
         fields['实际签约日期'].grid(row=row, column=1, pady=5)
         ttk.Label(frame, text="（用于确定合同年度）", foreground='gray').grid(row=row, column=2, sticky='w', pady=5)
         row += 1
         
-        # 起始日期
+        # 起始日期 - 使用日期选择器
         ttk.Label(frame, text="起始日期:").grid(row=row, column=0, sticky='e', pady=5)
-        fields['起始日期'] = ttk.Entry(frame, width=30)
+        fields['起始日期'] = DateEntry(frame, width=27, date_pattern='yyyy-mm-dd', locale='zh_CN')
         fields['起始日期'].grid(row=row, column=1, pady=5)
         row += 1
         
-        # 终止日期
+        # 终止日期 - 使用日期选择器
         ttk.Label(frame, text="终止日期:").grid(row=row, column=0, sticky='e', pady=5)
-        fields['终止日期'] = ttk.Entry(frame, width=30)
+        fields['终止日期'] = DateEntry(frame, width=27, date_pattern='yyyy-mm-dd', locale='zh_CN')
         fields['终止日期'].grid(row=row, column=1, pady=5)
         row += 1
         
@@ -757,16 +697,30 @@ class ContractManagerApp:
             contract = self.db.get_contract_by_no(contract_no)
             if contract:
                 fields['合同编号'].insert(0, contract[1] or '')
-                fields['合同编号'].config(state='disabled')  # 合同编号不可修改
+                fields['合同编号'].config(state='disabled')
                 fields['项目代码'].insert(0, contract[2] or '')
                 fields['合同名称'].insert(0, contract[3] or '')
                 fields['对方单位'].insert(0, contract[4] or '')
                 fields['区域'].set(contract[5] or '')
                 fields['合同金额'].insert(0, str(contract[6] or ''))
-                fields['实际签约日期'].delete(0, tk.END)
-                fields['实际签约日期'].insert(0, contract[7] or '')
-                fields['起始日期'].insert(0, contract[8] or '')
-                fields['终止日期'].insert(0, contract[9] or '')
+                
+                # 设置日期选择器的值
+                if contract[7]:
+                    try:
+                        fields['实际签约日期'].set_date(contract[7])
+                    except:
+                        pass
+                if contract[8]:
+                    try:
+                        fields['起始日期'].set_date(contract[8])
+                    except:
+                        pass
+                if contract[9]:
+                    try:
+                        fields['终止日期'].set_date(contract[9])
+                    except:
+                        pass
+                
                 fields['合同内容'].set(contract[10] or '')
         
         # 按钮
@@ -775,22 +729,42 @@ class ContractManagerApp:
         
         def save():
             try:
-                data = {
-                    '合同编号': fields['合同编号'].get().strip(),
-                    '项目代码': fields['项目代码'].get().strip(),
-                    '合同名称': fields['合同名称'].get().strip(),
-                    '对方单位名称': fields['对方单位'].get().strip(),
-                    '区域': fields['区域'].get(),
-                    '合同金额': float(fields['合同金额'].get().strip() or 0),
-                    '实际签约日期': fields['实际签约日期'].get().strip(),
-                    '合同起始日期': fields['起始日期'].get().strip(),
-                    '合同终止日期': fields['终止日期'].get().strip(),
-                    '合同内容': fields['合同内容'].get()
-                }
+                # 获取表单数据
+                contract_no_val = fields['合同编号'].get().strip()
+                project_code_val = fields['项目代码'].get().strip()
+                contract_name_val = fields['合同名称'].get().strip()
+                company_val = fields['对方单位'].get().strip()
+                region_val = fields['区域'].get()
+                amount_val = fields['合同金额'].get().strip()
+                sign_date_val = fields['实际签约日期'].get()
+                start_date_val = fields['起始日期'].get()
+                end_date_val = fields['终止日期'].get()
+                content_val = fields['合同内容'].get()
                 
-                if not data['合同编号']:
+                # 验证必填字段
+                if not contract_no_val:
                     messagebox.showwarning("警告", "合同编号不能为空")
                     return
+                
+                # 验证金额
+                try:
+                    amount = float(amount_val or 0)
+                except ValueError:
+                    messagebox.showwarning("警告", "合同金额必须是数字")
+                    return
+                
+                data = {
+                    '合同编号': contract_no_val,
+                    '项目代码': project_code_val,
+                    '合同名称': contract_name_val,
+                    '对方单位名称': company_val,
+                    '区域': region_val,
+                    '合同金额': amount,
+                    '实际签约日期': sign_date_val,
+                    '合同起始日期': start_date_val,
+                    '合同终止日期': end_date_val,
+                    '合同内容': content_val
+                }
                 
                 if contract_no:
                     # 修改
@@ -808,14 +782,13 @@ class ContractManagerApp:
                         self.load_data()
                     else:
                         messagebox.showwarning("警告", "合同编号已存在")
-            except ValueError:
-                messagebox.showwarning("警告", "合同金额必须是数字")
+            except Exception as e:
+                messagebox.showerror("错误", f"保存失败: {str(e)}")
         
         ttk.Button(btn_frame, text="保存", command=save).pack(side='left', padx=10)
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side='left', padx=10)
     
     def add_invoice(self):
-        """添加开票"""
         selected = self.contract_tree.selection()
         if not selected:
             messagebox.showwarning("警告", "请先选择一个合同")
@@ -836,8 +809,7 @@ class ContractManagerApp:
         ttk.Label(frame, text=contract_no).grid(row=0, column=1, sticky='w', pady=5)
         
         ttk.Label(frame, text="开票日期:").grid(row=1, column=0, sticky='e', pady=5)
-        date_entry = ttk.Entry(frame, width=25)
-        date_entry.insert(0, datetime.now().strftime('%Y-%m-%d'))
+        date_entry = DateEntry(frame, width=22, date_pattern='yyyy-mm-dd', locale='zh_CN')
         date_entry.grid(row=1, column=1, pady=5)
         
         ttk.Label(frame, text="开票金额:").grid(row=2, column=0, sticky='e', pady=5)
@@ -847,7 +819,7 @@ class ContractManagerApp:
         def save():
             try:
                 amount = float(amount_entry.get().strip())
-                date = date_entry.get().strip()
+                date = date_entry.get()
                 self.db.add_invoice(contract_no, date, amount)
                 messagebox.showinfo("成功", "开票记录添加成功")
                 dialog.destroy()
@@ -861,7 +833,6 @@ class ContractManagerApp:
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side='left', padx=10)
     
     def add_payment(self):
-        """添加回款"""
         selected = self.contract_tree.selection()
         if not selected:
             messagebox.showwarning("警告", "请先选择一个合同")
@@ -882,8 +853,7 @@ class ContractManagerApp:
         ttk.Label(frame, text=contract_no).grid(row=0, column=1, sticky='w', pady=5)
         
         ttk.Label(frame, text="回款日期:").grid(row=1, column=0, sticky='e', pady=5)
-        date_entry = ttk.Entry(frame, width=25)
-        date_entry.insert(0, datetime.now().strftime('%Y-%m-%d'))
+        date_entry = DateEntry(frame, width=22, date_pattern='yyyy-mm-dd', locale='zh_CN')
         date_entry.grid(row=1, column=1, pady=5)
         
         ttk.Label(frame, text="回款金额:").grid(row=2, column=0, sticky='e', pady=5)
@@ -893,7 +863,7 @@ class ContractManagerApp:
         def save():
             try:
                 amount = float(amount_entry.get().strip())
-                date = date_entry.get().strip()
+                date = date_entry.get()
                 self.db.add_payment(contract_no, date, amount)
                 messagebox.showinfo("成功", "回款记录添加成功")
                 dialog.destroy()
@@ -907,7 +877,6 @@ class ContractManagerApp:
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side='left', padx=10)
     
     def import_data(self):
-        """导入数据"""
         file_path = filedialog.askopenfilename(
             title="选择数据文件",
             filetypes=[
@@ -921,7 +890,7 @@ class ContractManagerApp:
             return
         
         try:
-            count = self.db.import_from_csv(file_path)
+            count = self.db.import_from_file(file_path)
             messagebox.showinfo("成功", f"成功导入 {count} 条合同记录")
             self.load_data()
         except Exception as e:
