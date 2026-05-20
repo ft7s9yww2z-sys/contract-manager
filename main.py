@@ -252,29 +252,109 @@ class DatabaseManager:
         return rows
     
     def import_from_csv(self, file_path):
-        """从CSV导入"""
+        """从CSV或Excel导入"""
         count = 0
         try:
-            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    data = {
-                        '合同编号': row.get('合同编号', ''),
-                        '项目代码': row.get('项目代码', ''),
-                        '合同名称': row.get('合同名称', ''),
-                        '对方单位名称': row.get('对方单位名称', ''),
-                        '区域': row.get('区域', ''),
-                        '合同金额': float(row.get('合同金额', 0) or 0),
-                        '实际签约日期': row.get('实际签约日期', ''),
-                        '合同起始日期': row.get('合同起始日期', ''),
-                        '合同终止日期': row.get('合同终止日期', ''),
-                        '合同内容': row.get('合同内容', '')
-                    }
-                    if data['合同编号'] and self.add_contract(data):
-                        count += 1
+            # 判断文件类型
+            if file_path.endswith(('.xlsx', '.xls')):
+                # Excel 文件
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(file_path, data_only=True)
+                    
+                    # 遍历所有工作表
+                    for sheet_name in wb.sheetnames:
+                        # 跳过非年份工作表（可选）
+                        ws = wb[sheet_name]
+                        
+                        # 获取表头
+                        headers = []
+                        for cell in ws[1]:
+                            headers.append(str(cell.value) if cell.value else '')
+                        
+                        # 从第二行开始读取数据
+                        for row in ws.iter_rows(min_row=2, values_only=True):
+                            if not row[0]:  # 跳过空行
+                                continue
+                            
+                            # 构建数据字典
+                            row_data = {}
+                            for i, header in enumerate(headers):
+                                if i < len(row):
+                                    row_data[header] = row[i]
+                            
+                            data = {
+                                '合同编号': str(row_data.get('合同编号', '') or ''),
+                                '项目代码': str(row_data.get('项目代码', '') or ''),
+                                '合同名称': str(row_data.get('合同名称', '') or ''),
+                                '对方单位名称': str(row_data.get('对方单位名称', '') or ''),
+                                '区域': str(row_data.get('区域', '') or ''),
+                                '合同金额': float(row_data.get('合同金额', 0) or row_data.get('合同额', 0) or 0),
+                                '实际签约日期': self._format_date(row_data.get('实际签约日期') or row_data.get('合同签字日期')),
+                                '合同起始日期': self._format_date(row_data.get('合同起始日期')),
+                                '合同终止日期': self._format_date(row_data.get('合同终止日期')),
+                                '合同内容': str(row_data.get('合同内容', '') or row_data.get('合同内容（发生项目）', '') or '')
+                            }
+                            
+                            if data['合同编号'] and data['合同编号'] != 'None':
+                                if self.add_contract(data):
+                                    count += 1
+                    
+                    wb.close()
+                    
+                except ImportError:
+                    raise Exception("需要安装 openpyxl 库来读取 Excel 文件")
+            else:
+                # CSV 文件
+                with open(file_path, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        data = {
+                            '合同编号': row.get('合同编号', ''),
+                            '项目代码': row.get('项目代码', ''),
+                            '合同名称': row.get('合同名称', ''),
+                            '对方单位名称': row.get('对方单位名称', ''),
+                            '区域': row.get('区域', ''),
+                            '合同金额': float(row.get('合同金额', 0) or 0),
+                            '实际签约日期': row.get('实际签约日期', ''),
+                            '合同起始日期': row.get('合同起始日期', ''),
+                            '合同终止日期': row.get('合同终止日期', ''),
+                            '合同内容': row.get('合同内容', '')
+                        }
+                        if data['合同编号'] and self.add_contract(data):
+                            count += 1
+            
             return count
         except Exception as e:
             raise e
+    
+    def _format_date(self, date_value):
+        """格式化日期"""
+        if not date_value:
+            return ''
+        
+        # 如果是 datetime 对象
+        if hasattr(date_value, 'strftime'):
+            return date_value.strftime('%Y-%m-%d')
+        
+        # 如果是字符串
+        date_str = str(date_value)
+        if date_str == 'None' or not date_str.strip():
+            return ''
+        
+        # 尝试解析常见格式
+        try:
+            from datetime import datetime as dt
+            # 尝试多种格式
+            for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%Y年%m月%d日']:
+                try:
+                    parsed = dt.strptime(date_str.strip(), fmt)
+                    return parsed.strftime('%Y-%m-%d')
+                except:
+                    continue
+            return date_str
+        except:
+            return date_str
 
 
 class ContractManagerApp:
@@ -827,10 +907,14 @@ class ContractManagerApp:
         ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side='left', padx=10)
     
     def import_csv(self):
-        """导入CSV"""
+        """导入数据"""
         file_path = filedialog.askopenfilename(
-            title="选择CSV文件",
-            filetypes=[("CSV文件", "*.csv"), ("所有文件", "*.*")]
+            title="选择数据文件",
+            filetypes=[
+                ("Excel文件", "*.xlsx *.xls"),
+                ("CSV文件", "*.csv"),
+                ("所有文件", "*.*")
+            ]
         )
         
         if not file_path:
