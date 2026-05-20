@@ -49,7 +49,7 @@ def safe_format_money(value, default='0.00'):
         
         # 如果是数字，直接格式化
         if isinstance(value, (int, float)):
-            return safe_format_money(value)
+            return f'{value:,.2f}'
         
         return str(value)
     except (ValueError, AttributeError, TypeError):
