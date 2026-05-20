@@ -34,6 +34,28 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, 'contracts.db')
 
 
+def safe_format_money(value, default='0.00'):
+    """安全格式化金额，处理字符串、None、空值等情况"""
+    if value is None or value == '':
+        return default
+    
+    try:
+        # 如果是字符串，尝试转换
+        if isinstance(value, str):
+            value = value.replace(',', '').strip()
+            if not value:
+                return default
+            value = float(value)
+        
+        # 如果是数字，直接格式化
+        if isinstance(value, (int, float)):
+            return safe_format_money(value)
+        
+        return str(value)
+    except (ValueError, AttributeError, TypeError):
+        return str(value) if value else default
+
+
 class DatabaseManager:
     """数据库管理"""
     
@@ -1197,11 +1219,11 @@ class ContractManagerApp:
             
             tree.insert('', 'end', values=(
                 合同编号, 合同名称 or '', 对方单位, 区域, 销售负责人 or '',
-                f'{合同额:,.2f}' if 合同额 else '0.00',
+                safe_format_money(合同额),
                 合同签字日期 or '', aging_days,
-                f'{开票金额:,.2f}' if 开票金额 else '0.00',
-                f'{到款金额:,.2f}' if 到款金额 else '0.00',
-                f'{应收账款:,.2f}' if 应收账款 else '0.00',
+                safe_format_money(开票金额),
+                safe_format_money(到款金额),
+                safe_format_money(应收账款),
                 催款状态 or '未催款', '操作'
             ))
         
@@ -1331,7 +1353,14 @@ class ContractManagerApp:
                     # 格式化金额字段
                     if i in [12, 13, 22, 23, 24, 25, 26, 28]:  # 金额字段
                         if val is not None:
-                            values.append(f'{val:,.2f}')
+                            try:
+                                # 尝试转换为浮点数
+                                if isinstance(val, str):
+                                    val = float(val.replace(',', '').strip()) if val.strip() else 0
+                                values.append(safe_format_money(val))
+                            except (ValueError, AttributeError):
+                                # 如果转换失败，直接显示原值
+                                values.append(str(val))
                         else:
                             values.append('')
                     else:
@@ -1566,9 +1595,25 @@ class ContractManagerApp:
                 if i < len(row):
                     val = row[i]
                     if i == 5:  # 发票金额
-                        values.append(f'{val:,.2f}' if val else '0.00')
+                        if val:
+                            try:
+                                if isinstance(val, str):
+                                    val = float(val.replace(',', '').strip()) if val.strip() else 0
+                                values.append(safe_format_money(val))
+                            except (ValueError, AttributeError):
+                                values.append(str(val))
+                        else:
+                            values.append('0.00')
                     elif i == 9:  # 除税
-                        values.append(f'{val:,.2f}' if val else '')
+                        if val:
+                            try:
+                                if isinstance(val, str):
+                                    val = float(val.replace(',', '').strip()) if val.strip() else 0
+                                values.append(safe_format_money(val))
+                            except (ValueError, AttributeError):
+                                values.append(str(val))
+                        else:
+                            values.append('')
                     else:
                         values.append(str(val) if val else '')
                 else:
@@ -1790,11 +1835,11 @@ class ContractManagerApp:
             
             self.warning_tree.insert('', 'end', values=(
                 合同编号, 合同名称 or '', 对方单位, 区域, 销售负责人 or '',
-                f'{合同额:,.2f}' if 合同额 else '0.00',
+                safe_format_money(合同额),
                 终止日期 or '', days_left,
-                f'{开票金额:,.2f}' if 开票金额 else '0.00',
-                f'{到款金额:,.2f}' if 到款金额 else '0.00',
-                f'{应收账款:,.2f}' if 应收账款 else '0.00'
+                safe_format_money(开票金额),
+                safe_format_money(到款金额),
+                safe_format_money(应收账款)
             ), tags=(tag,))
     
     def clear_warning_search(self):
@@ -1837,10 +1882,10 @@ class ContractManagerApp:
             receivable = (invoice or 0) - (payment or 0)
             self.yearly_tree.insert('', 'end', values=(
                 year, count,
-                f'{total:,.2f}' if total else '0.00',
-                f'{invoice:,.2f}' if invoice else '0.00',
-                f'{payment:,.2f}' if payment else '0.00',
-                f'{receivable:,.2f}'
+                safe_format_money(total),
+                safe_format_money(invoice),
+                safe_format_money(payment),
+                safe_format_money(receivable)
             ))
         
         self.draw_yearly_chart(rows)
@@ -1887,9 +1932,9 @@ class ContractManagerApp:
             region, count, total, invoice, payment = row
             self.region_tree.insert('', 'end', values=(
                 region, count,
-                f'{total:,.2f}' if total else '0.00',
-                f'{invoice:,.2f}' if invoice else '0.00',
-                f'{payment:,.2f}' if payment else '0.00'
+                safe_format_money(total),
+                safe_format_money(invoice),
+                safe_format_money(payment)
             ))
         
         self.draw_region_chart(rows)
@@ -1932,10 +1977,10 @@ class ContractManagerApp:
             receivable = (invoice or 0) - (payment or 0)
             self.sales_tree.insert('', 'end', values=(
                 salesperson or '未指定', count,
-                f'{total:,.2f}' if total else '0.00',
-                f'{invoice:,.2f}' if invoice else '0.00',
-                f'{payment:,.2f}' if payment else '0.00',
-                f'{receivable:,.2f}'
+                safe_format_money(total),
+                safe_format_money(invoice),
+                safe_format_money(payment),
+                safe_format_money(receivable)
             ))
         
         self.draw_salesperson_chart(rows)
