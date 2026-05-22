@@ -602,6 +602,39 @@ class DatabaseManager:
         conn.close()
         return rows
     
+    def normalize_header(self, header):
+        """标准化表头名称，去除空格、统一命名"""
+        if not header:
+            return ''
+        
+        # 去除空格、换行等
+        header = str(header).strip().replace(' ', '').replace('\n', '').replace('\r', '')
+        
+        # 列名映射表（支持多种变体）
+        header_map = {
+            '合同编号': ['合同编号', '合同号', '合同代码'],
+            '项目代码': ['项目代码', '项目编号', '项目号'],
+            '合同名称': ['合同名称', '合同标题', '项目名称'],
+            '对方单位名称': ['对方单位名称', '对方单位', '客户名称', '甲方名称', '签约对方'],
+            '销售负责人': ['销售负责人', '销售人员', '销售经理', '业务员', '负责人'],
+            '合同额': ['合同额', '合同金额', '合同总金额', '金额'],
+            '合同签字日期': ['合同签字日期', '合同签订日期', '实际签约日期', '签约日期', '签订日期'],
+            '合同起始日期': ['合同起始日期', '起始日期', '开始日期', '有效期开始'],
+            '合同终止日期': ['合同终止日期', '终止日期', '结束日期', '有效期结束', '到期日期'],
+            '到款情况': ['到款情况', '回款情况', '付款情况'],
+            '开票余额': ['开票余额', '未开票金额'],
+            '到款金额': ['到款金额', '回款金额', '已回款金额'],
+            '合同余额': ['合同余额', '未回款金额'],
+            '备注': ['备注', '说明', '备注说明', '备注（合同是否取回）']
+        }
+        
+        # 查找映射
+        for standard_name, variants in header_map.items():
+            if header in variants:
+                return standard_name
+        
+        return header
+    
     def import_contracts_from_file(self, file_path):
         """从文件导入合同"""
         count = 0
@@ -616,15 +649,17 @@ class DatabaseManager:
                 for sheet_name in wb.sheetnames:
                     ws = wb[sheet_name]
                     
-                    # 读取表头
+                    # 读取表头并标准化
                     headers = []
                     for cell in ws[1]:
                         header = str(cell.value).strip() if cell.value else ''
-                        headers.append(header)
+                        # 标准化列名
+                        normalized = self.normalize_header(header)
+                        headers.append(normalized)
                     
                     # 读取数据行
                     for row in ws.iter_rows(min_row=2, values_only=True):
-                        if not row[0] and not row[2]:  # 序号和合同编号都为空则跳过
+                        if not any(row):  # 整行都为空则跳过
                             continue
                         
                         row_data = {}
@@ -632,7 +667,7 @@ class DatabaseManager:
                             if i < len(row):
                                 row_data[header] = row[i]
                         
-                        # 字段映射
+                        # 字段映射（使用标准化后的列名）
                         data = {
                             '序号': row_data.get('序号'),
                             '下单日期': self._format_date(row_data.get('下单日期')),
@@ -640,14 +675,14 @@ class DatabaseManager:
                             '项目代码': str(row_data.get('项目代码', '') or ''),
                             '是否变更': str(row_data.get('是否变更', '') or ''),
                             '合同评审日期': self._format_date(row_data.get('合同评审日期')),
-                            '合同签字日期': self._format_date(row_data.get('合同签字日期') or row_data.get('实际签约日期')),
+                            '合同签字日期': self._format_date(row_data.get('合同签字日期')),
                             'crm日期': self._format_date(row_data.get('crm日期')),
                             '合同名称': str(row_data.get('合同名称', '') or ''),
                             '对方单位名称': str(row_data.get('对方单位名称', '') or ''),
                             '区域': str(row_data.get('区域', '') or ''),
-                            '销售负责人': str(row_data.get('销售负责人', '') or row_data.get('销售人员', '') or ''),
+                            '销售负责人': str(row_data.get('销售负责人', '') or ''),
                             '参考金额': self._parse_float(row_data.get('参考金额')),
-                            '合同额': self._parse_float(row_data.get('合同额') or row_data.get('合同金额')),
+                            '合同额': self._parse_float(row_data.get('合同额')),
                             '联系人': str(row_data.get('联系人', '') or ''),
                             '联系电话': str(row_data.get('联系电话', '') or ''),
                             '合同内容': str(row_data.get('合同内容', '') or ''),
